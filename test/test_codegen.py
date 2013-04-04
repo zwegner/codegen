@@ -22,4 +22,9 @@ def test_try_expect():
               "except IndexError, index_error:\n"
               "    print index_error")
     assert source == to_ast_and_back_again(source)
+
+def test_import():
+    source = "import intertools as iterators"
+    assert source == to_ast_and_back_again(source)
+    source = "from math import floor as fl, ceil as cl"
     assert source == to_ast_and_back_again(source)
