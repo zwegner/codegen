@@ -169,7 +169,10 @@ class SourceGenerator(NodeVisitor):
         for idx, item in enumerate(node.names):
             if idx:
                 self.write(', ')
-            self.write(item)
+            self.write(item.name)
+            if item.asname is not None:
+                self.write(' as ')
+                self.write(item.asname)
 
     def visit_Import(self, node):
         self.newline(node)
