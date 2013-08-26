@@ -169,7 +169,10 @@ class SourceGenerator(NodeVisitor):
         for idx, item in enumerate(node.names):
             if idx:
                 self.write(', ')
-            self.write(item)
+            self.write(item.name)
+            if item.asname is not None:
+                self.write(' as ')
+                self.write(item.asname)
 
     def visit_Import(self, node):
         self.newline(node)
@@ -297,7 +300,7 @@ class SourceGenerator(NodeVisitor):
     def visit_Delete(self, node):
         self.newline(node)
         self.write('del ')
-        for idx, target in enumerate(node):
+        for idx, target in enumerate(node.targets):
             if idx:
                 self.write(', ')
             self.visit(target)
@@ -308,6 +311,16 @@ class SourceGenerator(NodeVisitor):
         self.body(node.body)
         for handler in node.handlers:
             self.visit(handler)
+
+    def visit_ExceptHandler(self, node):
+        self.newline(node)
+        self.write('except ')
+        self.visit(node.type)
+        if node.name is not None:
+            self.write(', ')
+            self.visit(node.name)
+        self.write(':')
+        self.body(node.body)
 
     def visit_TryFinally(self, node):
         self.newline(node)
