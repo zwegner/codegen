@@ -7,6 +7,11 @@
     :copyright: Copyright 2008 by Armin Ronacher.
     :license: BSD.
 """
+
+# Updated ton contain latest pull requests from Doboy, jbremer,
+# gemoe100, and cwa-, even though those have not been pulled into
+# andreif's repo
+
 from ast import *
 
 BOOLOP_SYMBOLS = {
