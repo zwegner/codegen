@@ -1,3 +1,6 @@
+[![Build Status](https://secure.travis-ci.org/andrewschaaf/codegen.png)](http://travis-ci.org/andrewschaaf/codegen)
+
+
 # codegen
 
 Extension to ast that allow ast -> python code generation.
