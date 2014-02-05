@@ -8,8 +8,41 @@ class TestCodegen(unittest.TestCase):
         result = codegen.to_source(ast.parse(code))
         self.assertEqual(result.rstrip(), code.rstrip())
 
-    def test_Pow(self):
-        self.assertPreserved("y = (x ** 2)")
+    def test_BoolOp(self):
+        self.assertPreserved("(x and y)")
+        self.assertPreserved("(x or y)")
+
+    def test_BinOp(self):
+        self.assertPreserved("(x + y)")
+        self.assertPreserved("(x - y)")
+        self.assertPreserved("(x * y)")
+        self.assertPreserved("(x / y)")
+        self.assertPreserved("(x // y)")
+        self.assertPreserved("(x % y)")
+        self.assertPreserved("(x ** y)")
+        self.assertPreserved("(x << y)")
+        self.assertPreserved("(x >> y)")
+        self.assertPreserved("(x | y)")
+        self.assertPreserved("(x & y)")
+        self.assertPreserved("(x ^ y)")
+
+    def test_Compare(self):
+        self.assertPreserved("(x == y)")
+        self.assertPreserved("(x > y)")
+        self.assertPreserved("(x >= y)")
+        self.assertPreserved("(x in y)")
+        self.assertPreserved("(x is y)")
+        self.assertPreserved("(x is not y)")
+        self.assertPreserved("(x < y)")
+        self.assertPreserved("(x <= y)")
+        self.assertPreserved("(x != y)")
+        self.assertPreserved("(x not in y)")
+
+    def test_UnaryOp(self):
+        self.assertPreserved("(~x)")
+        self.assertPreserved("(not x)")
+        self.assertPreserved("(+x)")
+        self.assertPreserved("(-x)")
 
     def test_del(self):
         self.assertPreserved("del l[0]")
