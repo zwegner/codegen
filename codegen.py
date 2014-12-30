@@ -341,16 +341,6 @@ class SourceGenerator(NodeVisitor):
         self.write(':')
         self.body(node.body)
 
-    def visit_ExceptHandler(self, node):
-        self.newline(node)
-        self.write('except ')
-        self.visit(node.type)
-        if node.name is not None:
-            self.write(', ')
-            self.visit(node.name)
-        self.write(':')
-        self.body(node.body)
-
     def visit_TryFinally(self, node):
         self.newline(node)
         self.write('try:')
