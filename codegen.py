@@ -106,12 +106,20 @@ class SourceGenerator(NodeVisitor):
         self.precedence_ltr = [None]
 
         self.correct_line_numbers = correct_line_numbers
+        # The current line number we *think* we are on. As in it's most likely
+        # the line number of the last node we passed which can differ when
+        # the ast is broken
         self.line_number = line_number
-        # Are we in an environment where we can safely newline
+        # Can we insert a newline here without having to escape it?
+        # (are we between delimiting characters)
         self.can_newline = False
-        # After a colon we don't need a semicolon before the first item
+        # After a colon (but before a newline or another statement) we don't
+        # have to insert a semicolon
         self.after_block = True
-        # Should a newline be forced the next opportunity (due to a block ending or a block having)
+        # Should a newline be forced the next opportunity for one (this can
+        # happen because we're at the end of a block, before a statement having
+        # a block, or the first line of a statement having a block if said block
+        # contains a block-having statement anywhere)
         self.force_newline = False
 
     def process(self, node):
@@ -224,8 +232,8 @@ class SourceGenerator(NodeVisitor):
                 self.new_lines = 0
 
     def body(self, statements):
-        self.force_newline = (any(isinstance(i, self.BLOCK_NODES) for i in statements) or 
-                              (any(i.lineno > self.line_number for i in statements) and 
+        self.force_newline = (any(isinstance(i, self.BLOCK_NODES) for i in statements) or
+                              (any(i.lineno > self.line_number for i in statements) and
                               self.correct_line_numbers))
         self.indentation += 1
         self.after_block = not self.force_newline
@@ -553,7 +561,16 @@ class SourceGenerator(NodeVisitor):
     # Expressions
 
     def visit_Attribute(self, node):
-        self.visit(node.value)
+        # Edge case: due to the use of \d*[.]\d* for floats \d*[.]\w*, you have
+        # to put parenthesis around an integer literal do get an attribute from it
+        if isinstance(node.value, Num):
+            self.write('(')
+            self.visit(node.value)
+            self.write(')')
+        else:
+            self.prec_start(15)
+            self.visit(node.value)
+            self.prec_end()
         self.write('.' + node.attr)
 
     def visit_Call(self, node):
@@ -563,8 +580,9 @@ class SourceGenerator(NodeVisitor):
                 self.write(self.COMMA)
             else:
                 want_comma.append(True)
-
+        self.prec_start(15)
         self.visit(node.func)
+        self.prec_end()
         self.write('(')
         b = self.can_newline
         self.can_newline = True
@@ -690,7 +708,9 @@ class SourceGenerator(NodeVisitor):
 
     def visit_Subscript(self, node):
         self.maybe_break(node)
+        self.prec_start(15)
         self.visit(node.value)
+        self.prec_end()
         self.write('[')
         b = self.can_newline
         self.can_newline = True
