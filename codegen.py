@@ -250,7 +250,7 @@ class SourceGenerator(NodeVisitor):
             self.write('else:')
             self.body(node.orelse)
 
-    def signature(self, node):
+    def visit_arguments(self, node):
         want_comma = []
         b = self.can_newline
         self.can_newline = True
@@ -319,7 +319,7 @@ class SourceGenerator(NodeVisitor):
     def visit_ImportFrom(self, node):
         self.newline(node)
         self.write('from ')
-        self.write('%s%s' % ('.' * node.level, node.module))
+        self.write('%s%s' % ('.' * node.level, node.module or ''))
         self.write(' import ')
         for idx, item in enumerate(node.names):
             if idx:
@@ -357,7 +357,7 @@ class SourceGenerator(NodeVisitor):
         self.decorators(node)
         self.newline(node, body=True)
         self.write('def %s(' % node.name)
-        self.signature(node.args)
+        self.visit_arguments(node.args)
         self.write('):')
         self.body(node.body)
 
@@ -748,7 +748,7 @@ class SourceGenerator(NodeVisitor):
         self.maybe_break(node)
         self.prec_start(1)
         self.write('lambda ')
-        self.signature(node.args)
+        self.visit_arguments(node.args)
         self.write(self.COLON)
         self.visit(node.body)
         self.prec_end()
