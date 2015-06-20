@@ -8,10 +8,10 @@
     :license: BSD.
 """
 
-# Updated ton contain latest pull requests from Doboy, jbremer,
-# gemoe100, and cwa-, even though those have not been pulled into
-# andreif's repo
-
+# Do not exist in Python33
+import sys
+PY3 = sys.version_info >= (3, 0)
+TryExcept = TryFinally = YieldFrom = type(None)
 from ast import *
 
 def to_source(node, indent_with=' ' * 4, add_line_information=False, correct_line_numbers=False):
@@ -265,6 +265,13 @@ class SourceGenerator(NodeVisitor):
             self.write('else:')
             self.body(node.orelse)
 
+    def visit_bare(self, node):
+        # this node is allowed to be a bare tuple
+        if isinstance(node, Tuple):
+            self.visit_Tuple(node, False)
+        else:
+            self.visit(node)
+
     def visit_arguments(self, node):
         want_comma = []
         b = self.can_newline
@@ -318,10 +325,7 @@ class SourceGenerator(NodeVisitor):
     def visit_Assign(self, node):
         self.newline(node)
         for idx, target in enumerate(node.targets):
-            if isinstance(target, Tuple):
-                self.visit_Tuple(target, False)
-            else:
-                self.visit(target)
+            self.visit_bare(target)
             self.write(self.ASSIGN)
         self.visit(node.value)
 
@@ -367,10 +371,10 @@ class SourceGenerator(NodeVisitor):
         self.newline(node)
         if isinstance(node.value, Yield):
             self.visit_Yield(node.value, False)
-        elif isinstance(node.value, Tuple):
-            self.visit_Tuple(node.value, False)
+        elif isinstance(node.value, YieldFrom):
+            self.visit_YieldFrom(node.value, False)
         else:
-            self.generic_visit(node)
+            self.visit_bare(node.value)
 
     def visit_FunctionDef(self, node):
         self.newline(extra=1)
@@ -422,6 +426,12 @@ class SourceGenerator(NodeVisitor):
         self.write(have_args and '):' or ':')
         self.body(node.body)
 
+    def visit_arg(self, node):
+        self.write(node.arg)
+        if node.annotation is not None:
+            self.write(self.COLON)
+            self.visit(node.annotation)
+
     def visit_If(self, node):
         self.newline(node, body=True)
         self.write('if ')
@@ -447,10 +457,7 @@ class SourceGenerator(NodeVisitor):
     def visit_For(self, node):
         self.newline(node, body=True)
         self.write('for ')
-        if isinstance(node.target, Tuple):
-            self.visit_Tuple(node.target, False)
-        else:
-            self.visit(node.target)
+        self.visit_bare(node.target)
         self.write(' in ')
         self.visit(node.iter)
         self.write(':')
@@ -655,7 +662,7 @@ class SourceGenerator(NodeVisitor):
     def visit_Num(self, node):
         self.maybe_break(node)
 
-        negative = (node.n.imag or node.n.real) < 0
+        negative = (node.n.imag or node.n.real) < 0 and not PY3
         if negative:
             self.prec_start(self.UNARYOP_SYMBOLS[USub][1])
 
@@ -755,7 +762,7 @@ class SourceGenerator(NodeVisitor):
         symbol, precedence = self.UNARYOP_SYMBOLS[type(node.op)]
         self.prec_start(precedence)
         self.write(symbol)
-        if (isinstance(node.op, USub) and isinstance(node.operand, Num) 
+        if (not PY3 and isinstance(node.op, USub) and isinstance(node.operand, Num) 
                 and (node.operand.n.real or node.operand.n.imag) >= 0):
             self.paren_start()
             self.visit(node.operand)
@@ -779,10 +786,10 @@ class SourceGenerator(NodeVisitor):
         self.paren_end(']')
 
     def visit_Index(self, node, guard=False):
-         if isinstance(node.value, Tuple):
-             self.visit_Tuple(node.value, guard)
-         else:
-             self.visit(node.value)
+        if not guard:
+            self.visit_bare(node.value)
+        else:
+            self.visit(node.value)
 
     def visit_Slice(self, node):
         if node.lower is not None:
@@ -815,12 +822,18 @@ class SourceGenerator(NodeVisitor):
         self.maybe_break(node)
         if node.value is not None:
             self.write('yield ')
-            if isinstance(node.value, Tuple):
-                self.visit_Tuple(node.value, False)
-            else:
-                self.visit(node.value)
+            self.visit_bare(node.value)
         else:
             self.write('yield')
+        if paren:
+            self.paren_end()
+
+    def visit_YieldFrom(self, node, paren=True):
+        if paren:
+            self.paren_start()
+        self.maybe_break(node)
+        self.write('yield from ')
+        self.visit(node.value)
         if paren:
             self.paren_end()
 
@@ -890,7 +903,10 @@ class SourceGenerator(NodeVisitor):
     def visit_comprehension(self, node):
         self.maybe_break(node.target)
         self.write(' for ')
-        self.visit(node.target)
+        if PY3:
+            self.visit_bare(node.target)
+        else:
+            self.visit(node.target)
         self.write(' in ')
         # workaround: lambda and ternary need to be within parenthesis here
         self.prec_start(3)
