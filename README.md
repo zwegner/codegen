@@ -1,9 +1,15 @@
-[![Build Status](https://secure.travis-ci.org/andrewschaaf/codegen.png)](http://travis-ci.org/andrewschaaf/codegen)
-
-
 # codegen
 
-Extension to ast that allow ast -> python code generation.
+A minimalistic library which allows the decompilation of python ASTs back to python code.
+
+The primary goal of this library is to be light-weight. It can be used in any project just by
+including codegen.py in the project folder and it has no dependencies outside of the sys and ast
+modules. Next to this it also can perform line-number accurate decompilation.
+
+For a more powerful alternative, take a look at [astor](http://github.com/berkerpeksag/astor).
+
+This library currently only supports python 2. Python 3 support is being worked on but still
+unfinished
 
 ## License
 
