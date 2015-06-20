@@ -48,6 +48,7 @@ class SourceGenerator(NodeVisitor):
     """
 
     COMMA = ', '
+    TRAILING_COMMA = ','
     COLON = ': '
     ASSIGN = ' = '
     SEMICOLON = '; '
@@ -102,8 +103,8 @@ class SourceGenerator(NodeVisitor):
         self.indentation = 0
         self.new_lines = 0
 
-        self.precedence_stack = [0]
-        self.precedence_ltr = [None]
+        # precedence_stack: what precedence level are we on, could we safely newline before and is this operator left-to-right
+        self.precedence_stack = [[0, False, None]]
 
         self.correct_line_numbers = correct_line_numbers
         # The current line number we *think* we are on. As in it's most likely
@@ -131,24 +132,38 @@ class SourceGenerator(NodeVisitor):
     # Precedence management
 
     def prec_start(self, value, ltr=None):
-        if value < self.precedence_stack[-1]:
+        newline = self.can_newline
+        if value < self.precedence_stack[-1][0]:
             self.write('(')
-        self.precedence_ltr.append(ltr)
+            self.can_newline = True
         if ltr == False:
             value += 1
-        self.precedence_stack.append(value)
+        self.precedence_stack.append([value, newline, ltr])
 
-    def prec_middle(self):
-        if self.precedence_ltr[-1]:
-            self.precedence_stack[-1] += 1
-        elif self.precedence_ltr[-1] is False:
-            self.precedence_stack[-1] -= 1
+    def prec_middle(self, level=None):
+        if level is not None:
+            self.precedence_stack[-1][0] = level
+        elif self.precedence_stack[-1][2]:
+            self.precedence_stack[-1][0] += 1
+        elif self.precedence_stack[-1][2] is False:
+            self.precedence_stack[-1][0] -= 1
 
     def prec_end(self):
-        if self.precedence_ltr.pop():
-            self.precedence_stack[-1] -= 1
-        if self.precedence_stack.pop() < self.precedence_stack[-1]:
+        precedence, newline, ltr = self.precedence_stack.pop()
+        if ltr:
+            precedence -= 1
+        if precedence < self.precedence_stack[-1][0]:
             self.write(')')
+            self.can_newline = newline
+
+    def paren_start(self, symbol='('):
+        self.precedence_stack.append([0, self.can_newline, None])
+        self.can_newline = True
+        self.write(symbol)
+
+    def paren_end(self, symbol=')'):
+        _, self.can_newline, _ = self.precedence_stack.pop()
+        self.write(symbol)
 
     # convenience functions
 
@@ -350,15 +365,22 @@ class SourceGenerator(NodeVisitor):
 
     def visit_Expr(self, node):
         self.newline(node)
-        self.generic_visit(node)
+        if isinstance(node.value, Yield):
+            self.visit_Yield(node.value, False)
+        elif isinstance(node.value, Tuple):
+            self.visit_Tuple(node.value, False)
+        else:
+            self.generic_visit(node)
 
     def visit_FunctionDef(self, node):
         self.newline(extra=1)
         self.decorators(node)
         self.newline(node, body=True)
         self.write('def %s(' % node.name)
+        self.can_newline = True
         self.visit_arguments(node.args)
         self.write('):')
+        self.can_newline = False
         self.body(node.body)
 
     def visit_ClassDef(self, node):
@@ -565,9 +587,9 @@ class SourceGenerator(NodeVisitor):
         # Edge case: due to the use of \d*[.]\d* for floats \d*[.]\w*, you have
         # to put parenthesis around an integer literal do get an attribute from it
         if isinstance(node.value, Num):
-            self.write('(')
+            self.paren_start()
             self.visit(node.value)
-            self.write(')')
+            self.paren_end()
         else:
             self.prec_start(15)
             self.visit(node.value)
@@ -581,12 +603,22 @@ class SourceGenerator(NodeVisitor):
                 self.write(self.COMMA)
             else:
                 want_comma.append(True)
-        self.prec_start(15)
-        self.visit(node.func)
-        self.prec_end()
-        self.write('(')
-        b = self.can_newline
-        self.can_newline = True
+        #need to put parenthesis around numbers being called (this makes no sense)
+        if isinstance(node.func, Num):
+            self.paren_start()
+            self.visit_Num(node.func)
+            self.paren_end()
+        else:
+            self.prec_start(15)
+            self.visit(node.func)
+            self.prec_end()
+        # special case generator expressions as only argument
+        if (len(node.args) == 1 and isinstance(node.args[0], GeneratorExp) and
+                not node.keywords and not node.starargs and not node.kwargs):
+            self.visit_GeneratorExp(node.args[0])
+            return
+
+        self.paren_start()
         for arg in node.args:
             write_comma()
             self.maybe_break(arg)
@@ -606,8 +638,7 @@ class SourceGenerator(NodeVisitor):
             self.maybe_break(node.kwargs)
             self.write('**')
             self.visit(node.kwargs)
-        self.can_newline = b
-        self.write(')')
+        self.paren_end()
 
     def visit_Name(self, node):
         self.maybe_break(node)
@@ -623,44 +654,52 @@ class SourceGenerator(NodeVisitor):
 
     def visit_Num(self, node):
         self.maybe_break(node)
-        self.write(repr(node.n))
+
+        negative = (node.n.imag or node.n.real) < 0
+        if negative:
+            self.prec_start(self.UNARYOP_SYMBOLS[USub][1])
+
+        # 1e999 and related friends are parsed into inf
+        if abs(node.n) == 1e999:
+            if negative:
+                self.write('-')
+            self.write('1e999')
+            if node.n.imag:
+                self.write('j')
+        else:
+            self.write(repr(node.n))
+
+        if negative:
+            self.prec_end()
 
     def visit_Tuple(self, node, guard=True):
-        # Don't use extra parenthesis for "for" statement unpacking
-        # and other things
-        if guard:
-            self.write('(')
-            b = self.can_newline
-            self.can_newline = True
+        if guard or not node.elts:
+            self.paren_start()
         idx = -1
         for idx, item in enumerate(node.elts):
             if idx:
                 self.write(self.COMMA)
             self.visit(item)
-        if guard:
-            self.write(idx and ')' or ',)')
-            self.can_newline = b
+        if not idx:
+            self.write(self.TRAILING_COMMA)
+        if guard or not node.elts:
+            self.paren_end()
 
     def _sequence_visit(left, right): # pylint: disable=E0213
         def visit(self, node):
-            self.write(left)
-            b = self.can_newline
-            self.can_newline = True
+            self.paren_start(left)
             for idx, item in enumerate(node.elts):
                 if idx:
                     self.write(self.COMMA)
                 self.visit(item)
-            self.can_newline = b
-            self.write(right)
+            self.paren_end(right)
         return visit
 
     visit_List = _sequence_visit('[', ']')
     visit_Set = _sequence_visit('{', '}')
 
     def visit_Dict(self, node):
-        self.write('{')
-        b = self.can_newline
-        self.can_newline = True
+        self.paren_start('{')
         for idx, (key, value) in enumerate(zip(node.keys, node.values)):
             if idx:
                 self.write(self.COMMA)
@@ -668,23 +707,34 @@ class SourceGenerator(NodeVisitor):
             self.visit(key)
             self.write(self.COLON)
             self.visit(value)
-        self.can_newline = b
-        self.write('}')
+        self.paren_end('}')
 
     def visit_BinOp(self, node):
         self.maybe_break(node)
         symbol, precedence = self.BINOP_SYMBOLS[type(node.op)]
         self.prec_start(precedence, type(node.op) != Pow)
-        self.visit(node.left)
+
+        # work around python's negative integer literal optimization
+        if type(node.op) == Pow and isinstance(node.left, Num) and (node.left.n.real or node.left.n.imag) < 0:
+            self.paren_start()
+            self.visit(node.left)
+            self.paren_end()
+            self.prec_middle(13)
+        elif isinstance(node.op, Pow):
+            self.visit(node.left)
+            self.prec_middle(13)
+        else:
+            self.visit(node.left)
+            self.prec_middle()
         self.write(symbol)
-        self.prec_middle()
         self.visit(node.right)
         self.prec_end()
 
     def visit_BoolOp(self, node):
         self.maybe_break(node)
         symbol, precedence = self.BOOLOP_SYMBOLS[type(node.op)]
-        self.prec_start(precedence)
+        self.prec_start(precedence, True)
+        self.prec_middle()
         for idx, value in enumerate(node.values):
             if idx:
                 self.write(symbol)
@@ -693,7 +743,8 @@ class SourceGenerator(NodeVisitor):
 
     def visit_Compare(self, node):
         self.maybe_break(node)
-        self.prec_start(6)
+        self.prec_start(6, True)
+        self.prec_middle()
         self.visit(node.left)
         for op, right in zip(node.ops, node.comparators):
             self.write(self.CMPOP_SYMBOLS[type(op)][0])
@@ -704,20 +755,34 @@ class SourceGenerator(NodeVisitor):
         symbol, precedence = self.UNARYOP_SYMBOLS[type(node.op)]
         self.prec_start(precedence)
         self.write(symbol)
-        self.visit(node.operand)
+        if (isinstance(node.op, USub) and isinstance(node.operand, Num) 
+                and (node.operand.n.real or node.operand.n.imag) >= 0):
+            self.paren_start()
+            self.visit(node.operand)
+            self.paren_end()
+        else:
+            self.visit(node.operand)
         self.prec_end()
 
     def visit_Subscript(self, node):
         self.maybe_break(node)
-        self.prec_start(15)
-        self.visit(node.value)
-        self.prec_end()
-        self.write('[')
-        b = self.can_newline
-        self.can_newline = True
+        if isinstance(node.value, Num):
+            self.paren_start()
+            self.visit_Num(node.value)
+            self.paren_end()
+        else:
+            self.prec_start(15)
+            self.visit(node.value)
+            self.prec_end()
+        self.paren_start('[')
         self.visit(node.slice)
-        self.can_newline = b
-        self.write(']')
+        self.paren_end(']')
+
+    def visit_Index(self, node, guard=False):
+         if isinstance(node.value, Tuple):
+             self.visit_Tuple(node.value, guard)
+         else:
+             self.visit(node.value)
 
     def visit_Slice(self, node):
         if node.lower is not None:
@@ -730,19 +795,34 @@ class SourceGenerator(NodeVisitor):
             if not (isinstance(node.step, Name) and node.step.id == 'None'):
                 self.visit(node.step)
 
+    def visit_Ellipsis(self, node):
+        self.maybe_break(node)
+        self.write('...')
+
     def visit_ExtSlice(self, node):
         for idx, item in enumerate(node.dims):
             if idx:
                 self.write(self.COMMA)
-            self.visit(item)
+            if isinstance(item, Index):
+                self.visit_Index(item, True)
+            else:
+                self.visit(item)
 
-    def visit_Yield(self, node):
+    def visit_Yield(self, node, paren=True):
+        # yield can only be used in a statement context, or we're between parenthesis
+        if paren:
+            self.paren_start()
         self.maybe_break(node)
         if node.value is not None:
             self.write('yield ')
-            self.visit(node.value)
+            if isinstance(node.value, Tuple):
+                self.visit_Tuple(node.value, False)
+            else:
+                self.visit(node.value)
         else:
             self.write('yield')
+        if paren:
+            self.paren_end()
 
     def visit_Lambda(self, node):
         self.maybe_break(node)
@@ -753,21 +833,14 @@ class SourceGenerator(NodeVisitor):
         self.visit(node.body)
         self.prec_end()
 
-    def visit_Ellipsis(self, node):
-        self.maybe_break(node)
-        self.write('Ellipsis')
-
-    def _generator_visit(left, right): # pylint: disable=E0213
+    def _generator_visit(left, right):
         def visit(self, node):
             self.maybe_break(node)
-            self.write(left)
-            b = self.can_newline
-            self.can_newline = True
+            self.paren_start(left)
             self.visit(node.elt)
             for comprehension in node.generators:
                 self.visit(comprehension)
-            self.can_newline = b
-            self.write(right)
+            self.paren_end(right)
         return visit
 
     visit_ListComp = _generator_visit('[', ']')
@@ -776,16 +849,13 @@ class SourceGenerator(NodeVisitor):
 
     def visit_DictComp(self, node):
         self.maybe_break(node)
-        self.write('{')
-        b = self.can_newline
-        self.can_newline = True
+        self.paren_start('{')
         self.visit(node.key)
         self.write(self.COLON)
         self.visit(node.value)
         for comprehension in node.generators:
             self.visit(comprehension)
-        self.can_newline = b
-        self.write('}')
+        self.paren_end('}')
 
     def visit_IfExp(self, node):
         self.maybe_break(node)
@@ -793,7 +863,7 @@ class SourceGenerator(NodeVisitor):
         self.visit(node.body)
         self.write(' if ')
         self.visit(node.test)
-        self.prec_middle()
+        self.prec_middle(1)
         self.write(' else ')
         self.visit(node.orelse)
         self.prec_end()
@@ -822,7 +892,11 @@ class SourceGenerator(NodeVisitor):
         self.write(' for ')
         self.visit(node.target)
         self.write(' in ')
+        # workaround: lambda and ternary need to be within parenthesis here
+        self.prec_start(3)
         self.visit(node.iter)
+        self.prec_end()
+
         for if_ in node.ifs:
             self.write(' if ')
             self.visit(if_)
