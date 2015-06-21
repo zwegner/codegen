@@ -8,11 +8,25 @@
     :license: BSD.
 """
 
-# Do not exist in Python33
 import sys
 PY3 = sys.version_info >= (3, 0)
-TryExcept = TryFinally = YieldFrom = type(None)
+# These might not exist, so we put them equal to NoneType
+TryExcept = TryFinally = YieldFrom = MatMult = type(None)
+
 from ast import *
+
+class Sep(object):
+    # Performs the common pattern of returning a different symbol the first
+    # time the object is called
+    def __init__(self, last, first=''):
+        self.last = last
+        self.first = first
+        self.begin = True
+    def __call__(self):
+        if self.begin:
+            self.begin = False
+            return self.first
+        return self.last
 
 def to_source(node, indent_with=' ' * 4, add_line_information=False, correct_line_numbers=False):
     """This function can convert a node tree back into python sourcecode.
@@ -62,6 +76,7 @@ class SourceGenerator(NodeVisitor):
         Add:        (' + ',  11),
         Sub:        (' - ',  11),
         Mult:       (' * ',  12),
+        MatMult:    (' @ ',  12),
         Div:        (' / ',  12),
         FloorDiv:   (' // ', 12),
         Mod:        (' % ',  12),
@@ -168,6 +183,8 @@ class SourceGenerator(NodeVisitor):
     # convenience functions
 
     def write(self, x):
+        if not x:
+            return
         if self.new_lines:
             if self.result or self.correct_line_numbers:
                 self.result.append('\n' * self.new_lines)
@@ -273,18 +290,11 @@ class SourceGenerator(NodeVisitor):
             self.visit(node)
 
     def visit_arguments(self, node):
-        want_comma = []
-        b = self.can_newline
-        self.can_newline = True
-        def write_comma():
-            if want_comma:
-                self.write(self.COMMA)
-            else:
-                want_comma.append(True)
+        sep = Sep(self.COMMA)
 
         padding = [None] * (len(node.args) - len(node.defaults))
         for arg, default in zip(node.args, padding + node.defaults):
-            write_comma()
+            self.write(sep())
             if default is not None:
                 self.maybe_break(default)
             self.visit(arg)
@@ -292,12 +302,11 @@ class SourceGenerator(NodeVisitor):
                 self.write('=')
                 self.visit(default)
         if node.vararg is not None:
-            write_comma()
+            self.write(sep())
             self.write('*' + node.vararg)
         if node.kwarg is not None:
-            write_comma()
+            self.write(sep())
             self.write('**' + node.kwarg)
-        self.can_newline = b
 
     def decorators(self, node):
         for decorator in node.decorator_list:
@@ -340,20 +349,17 @@ class SourceGenerator(NodeVisitor):
         self.write('from ')
         self.write('%s%s' % ('.' * node.level, node.module or ''))
         self.write(' import ')
-        for idx, item in enumerate(node.names):
-            if idx:
-                self.write(self.COMMA)
-            self.write(item.name)
-            if item.asname is not None:
-                self.write(' as ')
-                self.write(item.asname)
+        sep = Sep(self.COMMA)
+        for item in node.names:
+            self.write(sep())
+            self.visit(item)
 
     def visit_Import(self, node):
         self.newline(node)
         self.write('import ')
-        for idx, item in enumerate(node.names):
-            if idx:
-                self.write(self.COMMA)
+        sep = Sep(self.COMMA)
+        for item in node.names:
+            self.write(sep())
             self.visit(item)
 
     def visit_Exec(self, node):
@@ -380,50 +386,44 @@ class SourceGenerator(NodeVisitor):
         self.newline(extra=1)
         self.decorators(node)
         self.newline(node, body=True)
-        self.write('def %s(' % node.name)
-        self.can_newline = True
+        self.paren_start('def %s(' % node.name)
         self.visit_arguments(node.args)
-        self.write('):')
-        self.can_newline = False
+        self.paren_end('):')
         self.body(node.body)
 
     def visit_ClassDef(self, node):
-        have_args = []
-        def paren_or_comma():
-            if have_args:
-                self.write(self.COMMA)
-            else:
-                have_args.append(True)
-                self.write('(')
-
         self.newline(extra=2)
         self.decorators(node)
         self.newline(node, body=True)
         self.write('class %s' % node.name)
-        self.can_newline = True
-        for base in node.bases:
-            paren_or_comma()
-            self.visit(base)
-        # XXX: the if here is used to keep this module compatible
-        #      with python 2.6.
-        if hasattr(node, 'keywords'):
-            for keyword in node.keywords:
-                paren_or_comma()
-                self.maybe_break(keyword.value)
-                self.write(keyword.arg + '=')
-                self.visit(keyword.value)
-            if node.starargs is not None:
-                paren_or_comma()
-                self.maybe_break(node.starargs)
-                self.write('*')
-                self.visit(node.starargs)
-            if node.kwargs is not None:
-                paren_or_comma()
-                self.maybe_break(node.kwargs)
-                self.write('**')
-                self.visit(node.kwargs)
-        self.can_newline = False
-        self.write(have_args and '):' or ':')
+
+        if node.bases or node.keywords or node.starargs or node.kwargs:
+            self.paren_start()
+            sep = Sep(self.COMMA)
+
+            for base in node.bases:
+                self.write(sep())
+                self.visit(base)
+            # XXX: the if here is used to keep this module compatible
+            #      with python 2.6.
+            if hasattr(node, 'keywords'):
+                for keyword in node.keywords:
+                    self.write(sep())
+                    self.maybe_break(keyword.value)
+                    self.write(keyword.arg + '=')
+                    self.visit(keyword.value)
+                if node.starargs is not None:
+                    self.write(sep())
+                    self.maybe_break(node.starargs)
+                    self.write('*')
+                    self.visit(node.starargs)
+                if node.kwargs is not None:
+                    self.write(sep())
+                    self.maybe_break(node.kwargs)
+                    self.write('**')
+                    self.visit(node.kwargs)
+            self.paren_end()
+        self.write(':')
         self.body(node.body)
 
     def visit_arg(self, node):
@@ -439,8 +439,7 @@ class SourceGenerator(NodeVisitor):
         self.write(':')
         self.body(node.body)
         while True:
-            else_ = node.orelse
-            if len(else_) == 1 and isinstance(else_[0], If):
+            if len(node.orelse) == 1 and isinstance(node.orelse[0], If):
                 node = else_[0]
                 self.newline(node.test, body=True)
                 self.write('elif ')
@@ -448,10 +447,10 @@ class SourceGenerator(NodeVisitor):
                 self.write(':')
                 self.body(node.body)
             else:
-                if else_:
+                if node.orelse:
                     self.newline(body=True)
                     self.write('else:')
-                    self.body(else_)
+                    self.body(node.orelse)
                 break
 
     def visit_For(self, node):
@@ -473,41 +472,63 @@ class SourceGenerator(NodeVisitor):
     def visit_With(self, node):
         self.newline(node, body=True)
         self.write('with ')
+
+        if PY3:
+            sep = Sep(self.COMMA)
+            for item in node.items:
+                self.write(sep())
+                self.visit_withitem(item)
+        else:
+            # in python 2, similarly to the elif statement, multiple nested context managers
+            # are generally the multi-form of a single with statement
+            self.visit_withitem(node)
+            while len(node.body) == 1 and isinstance(node.body[0], With):
+                node = node.body[0]
+                self.write(self.COMMA)
+                self.visit_withitem(node)
+        self.write(':')
+        self.body(node.body)
+
+    def visit_withitem(self, node):
         self.visit(node.context_expr)
         if node.optional_vars is not None:
             self.write(' as ')
             self.visit(node.optional_vars)
-        self.write(':')
-        self.body(node.body)
 
     def visit_Pass(self, node):
         self.newline(node)
         self.write('pass')
 
     def visit_Print(self, node):
-        # XXX: python 2.6 only
+        # XXX: python 2 only
         self.newline(node)
         self.write('print ')
-        want_comma = False
+        sep = Sep(self.COMMA)
         if node.dest is not None:
             self.write(' >> ')
             self.visit(node.dest)
-            want_comma = True
+            sep()
         for value in node.values:
-            if want_comma:
-                self.write(self.COMMA)
+            self.write(sep())
             self.visit(value)
-            want_comma = True
         if not node.nl:
-            self.write(',')
+            self.write(self.TRAILING_COMMA)
 
     def visit_Delete(self, node):
         self.newline(node)
         self.write('del ')
-        for idx, target in enumerate(node.targets):
-            if idx:
-                self.write(self.COMMA)
+        sep = Sep(self.COMMA)
+        for target in node.targets:
+            self.write(sep())
             self.visit(target)
+
+    def visit_Try(self, node):
+        # Python 3 only. exploits the fact that TryExcept uses the same attribute names
+        self.visit_TryExcept(node)
+        if node.finalbody:
+            self.newline(body=True)
+            self.write('finally:')
+            self.body(node.finalbody)
 
     def visit_TryExcept(self, node):
         self.newline(node, body=True)
@@ -520,19 +541,8 @@ class SourceGenerator(NodeVisitor):
             self.write('else:')
             self.body(node.orelse)
 
-    def visit_ExceptHandler(self, node):
-        self.newline(node, body=True)
-        self.write('except')
-        if node.type:
-            self.write(' ')
-            self.visit(node.type)
-        if node.name:
-            self.write(self.COMMA)
-            self.visit(node.name)
-        self.write(':')
-        self.body(node.body)
-
     def visit_TryFinally(self, node):
+        # Python 2 only
         if len(node.body) == 1 and isinstance(node.body[0], TryExcept):
             self.visit_TryExcept(node.body[0])
         else:
@@ -542,6 +552,22 @@ class SourceGenerator(NodeVisitor):
         self.newline(body=True)
         self.write('finally:')
         self.body(node.finalbody)
+
+    def visit_ExceptHandler(self, node):
+        self.newline(node, body=True)
+        self.write('except')
+        if node.type:
+            self.write(' ')
+            self.visit(node.type)
+        if node.name:
+            if PY3:
+                self.write(' as ')
+                self.write(node.name)
+            else:
+                self.write(self.COMMA)
+                self.visit(node.name)
+        self.write(':')
+        self.body(node.body)
 
     def visit_Global(self, node):
         self.newline(node)
@@ -604,12 +630,6 @@ class SourceGenerator(NodeVisitor):
         self.write('.' + node.attr)
 
     def visit_Call(self, node):
-        want_comma = []
-        def write_comma():
-            if want_comma:
-                self.write(self.COMMA)
-            else:
-                want_comma.append(True)
         #need to put parenthesis around numbers being called (this makes no sense)
         if isinstance(node.func, Num):
             self.paren_start()
@@ -626,22 +646,23 @@ class SourceGenerator(NodeVisitor):
             return
 
         self.paren_start()
+        sep = Sep(self.COMMA)
         for arg in node.args:
-            write_comma()
+            self.write(sep())
             self.maybe_break(arg)
             self.visit(arg)
         for keyword in node.keywords:
-            write_comma()
+            self.write(sep())
             self.maybe_break(keyword.value)
             self.write(keyword.arg + '=')
             self.visit(keyword.value)
         if node.starargs is not None:
-            write_comma()
+            self.write(sep())
             self.maybe_break(node.starargs)
             self.write('*')
             self.visit(node.starargs)
         if node.kwargs is not None:
-            write_comma()
+            self.write(sep())
             self.maybe_break(node.kwargs)
             self.write('**')
             self.visit(node.kwargs)
@@ -650,6 +671,10 @@ class SourceGenerator(NodeVisitor):
     def visit_Name(self, node):
         self.maybe_break(node)
         self.write(node.id)
+
+    def visit_NameConstant(self, node):
+        self.maybe_break(node)
+        self.write(repr(node.value))
 
     def visit_Str(self, node):
         self.maybe_break(node)
@@ -682,12 +707,11 @@ class SourceGenerator(NodeVisitor):
     def visit_Tuple(self, node, guard=True):
         if guard or not node.elts:
             self.paren_start()
-        idx = -1
-        for idx, item in enumerate(node.elts):
-            if idx:
-                self.write(self.COMMA)
+        sep = Sep(self.COMMA)
+        for item in node.elts:
+            self.write(sep())
             self.visit(item)
-        if not idx:
+        if len(node.elts) == 1:
             self.write(self.TRAILING_COMMA)
         if guard or not node.elts:
             self.paren_end()
@@ -695,9 +719,9 @@ class SourceGenerator(NodeVisitor):
     def _sequence_visit(left, right): # pylint: disable=E0213
         def visit(self, node):
             self.paren_start(left)
-            for idx, item in enumerate(node.elts):
-                if idx:
-                    self.write(self.COMMA)
+            sep = Sep(self.COMMA)
+            for item in node.elts:
+                self.write(sep())
                 self.visit(item)
             self.paren_end(right)
         return visit
@@ -707,9 +731,9 @@ class SourceGenerator(NodeVisitor):
 
     def visit_Dict(self, node):
         self.paren_start('{')
-        for idx, (key, value) in enumerate(zip(node.keys, node.values)):
-            if idx:
-                self.write(self.COMMA)
+        sep = Sep(self.COMMA)
+        for key, value in zip(node.keys, node.values):
+            self.write(sep())
             self.maybe_break(value)
             self.visit(key)
             self.write(self.COLON)
@@ -722,12 +746,7 @@ class SourceGenerator(NodeVisitor):
         self.prec_start(precedence, type(node.op) != Pow)
 
         # work around python's negative integer literal optimization
-        if type(node.op) == Pow and isinstance(node.left, Num) and (node.left.n.real or node.left.n.imag) < 0:
-            self.paren_start()
-            self.visit(node.left)
-            self.paren_end()
-            self.prec_middle(13)
-        elif isinstance(node.op, Pow):
+        if isinstance(node.op, Pow):
             self.visit(node.left)
             self.prec_middle(13)
         else:
@@ -742,9 +761,9 @@ class SourceGenerator(NodeVisitor):
         symbol, precedence = self.BOOLOP_SYMBOLS[type(node.op)]
         self.prec_start(precedence, True)
         self.prec_middle()
-        for idx, value in enumerate(node.values):
-            if idx:
-                self.write(symbol)
+        sep = Sep(symbol)
+        for value in node.values:
+            self.write(sep())
             self.visit(value)
         self.prec_end()
 
@@ -762,6 +781,8 @@ class SourceGenerator(NodeVisitor):
         symbol, precedence = self.UNARYOP_SYMBOLS[type(node.op)]
         self.prec_start(precedence)
         self.write(symbol)
+        # workaround: in python 2, an explicit USub node around a number literal
+        # indicates the literal was surrounded by parenthesis
         if (not PY3 and isinstance(node.op, USub) and isinstance(node.operand, Num) 
                 and (node.operand.n.real or node.operand.n.imag) >= 0):
             self.paren_start()
@@ -773,6 +794,7 @@ class SourceGenerator(NodeVisitor):
 
     def visit_Subscript(self, node):
         self.maybe_break(node)
+        # have to surround literals by parenthesis (at least in Py2)
         if isinstance(node.value, Num):
             self.paren_start()
             self.visit_Num(node.value)
@@ -786,6 +808,7 @@ class SourceGenerator(NodeVisitor):
         self.paren_end(']')
 
     def visit_Index(self, node, guard=False):
+        # When a subscript includes a tuple directly, the parenthesis can be dropped
         if not guard:
             self.visit_bare(node.value)
         else:
@@ -817,9 +840,9 @@ class SourceGenerator(NodeVisitor):
 
     def visit_Yield(self, node, paren=True):
         # yield can only be used in a statement context, or we're between parenthesis
+        self.maybe_break(node)
         if paren:
             self.paren_start()
-        self.maybe_break(node)
         if node.value is not None:
             self.write('yield ')
             self.visit_bare(node.value)
@@ -829,9 +852,9 @@ class SourceGenerator(NodeVisitor):
             self.paren_end()
 
     def visit_YieldFrom(self, node, paren=True):
+        self.maybe_break(node)
         if paren:
             self.paren_start()
-        self.maybe_break(node)
         self.write('yield from ')
         self.visit(node.value)
         if paren:
@@ -896,6 +919,7 @@ class SourceGenerator(NodeVisitor):
     # Helper Nodes
 
     def visit_alias(self, node):
+        self.maybe_break(node)
         self.write(node.name)
         if node.asname is not None:
             self.write(' as ' + node.asname)
