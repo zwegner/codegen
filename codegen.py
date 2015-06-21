@@ -219,7 +219,7 @@ class SourceGenerator(NodeVisitor):
                     self.new_lines = 1
                 self.line_number = node.lineno
 
-            elif node is not None:
+            else:
                 self.new_lines = node.lineno - self.line_number + self.new_lines
                 if self.new_lines < 0:
                     # Weird ast with linenumbers going back in time. lets
@@ -395,8 +395,7 @@ class SourceGenerator(NodeVisitor):
             elif node.kwonlyargs:
                 self.write(sep() + '*')
 
-            padding = [None] * (len(node.kwonlyargs) - len(node.kw_defaults))
-            for arg, default in zip(node.kwonlyargs, padding + node.kw_defaults):
+            for arg, default in zip(node.kwonlyargs, node.kw_defaults):
                 self.write(sep())
                 self.visit(arg)
                 if default is not None:
@@ -433,7 +432,8 @@ class SourceGenerator(NodeVisitor):
         self.newline(node, body=True)
         self.write('class %s' % node.name)
 
-        if node.bases or node.keywords or node.starargs or node.kwargs:
+        if node.bases or (hasattr(node, "keywords") and 
+                          (node.keywords or node.starargs or node.kwargs)):
             self.paren_start()
             sep = Sep(self.COMMA)
 
@@ -503,7 +503,7 @@ class SourceGenerator(NodeVisitor):
         self.newline(node, body=True)
         self.write('with ')
 
-        if PY3:
+        if hasattr(node, 'items'):
             sep = Sep(self.COMMA)
             for item in node.items:
                 self.write(sep())
@@ -589,13 +589,13 @@ class SourceGenerator(NodeVisitor):
         if node.type:
             self.write(' ')
             self.visit(node.type)
-        if node.name:
-            if PY3:
+            if node.name:
                 self.write(' as ')
-                self.write(node.name)
-            else:
-                self.write(self.COMMA)
-                self.visit(node.name)
+                # Compatability
+                if isinstance(node.name, AST):
+                    self.visit(node.name)
+                else:
+                    self.write(node.name)
         self.write(':')
         self.body(node.body)
 
@@ -856,7 +856,7 @@ class SourceGenerator(NodeVisitor):
                 self.visit(node.step)
 
     def visit_Ellipsis(self, node):
-        self.maybe_break(node)
+        # Ellipsis has no lineno information
         self.write('...')
 
     def visit_ExtSlice(self, node):
@@ -949,7 +949,7 @@ class SourceGenerator(NodeVisitor):
     # Helper Nodes
 
     def visit_alias(self, node):
-        self.maybe_break(node)
+        # alias does not have line number information
         self.write(node.name)
         if node.asname is not None:
             self.write(' as ' + node.asname)
