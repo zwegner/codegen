@@ -66,6 +66,7 @@ class SourceGenerator(NodeVisitor):
     COLON = ': '
     ASSIGN = ' = '
     SEMICOLON = '; '
+    ARROW = ' -> '
 
     BOOLOP_SYMBOLS = {
         And:        (' and ', 4),
@@ -289,25 +290,6 @@ class SourceGenerator(NodeVisitor):
         else:
             self.visit(node)
 
-    def visit_arguments(self, node):
-        sep = Sep(self.COMMA)
-
-        padding = [None] * (len(node.args) - len(node.defaults))
-        for arg, default in zip(node.args, padding + node.defaults):
-            self.write(sep())
-            if default is not None:
-                self.maybe_break(default)
-            self.visit(arg)
-            if default is not None:
-                self.write('=')
-                self.visit(default)
-        if node.vararg is not None:
-            self.write(sep())
-            self.write('*' + node.vararg)
-        if node.kwarg is not None:
-            self.write(sep())
-            self.write('**' + node.kwarg)
-
     def decorators(self, node):
         for decorator in node.decorator_list:
             self.force_newline = True
@@ -388,8 +370,62 @@ class SourceGenerator(NodeVisitor):
         self.newline(node, body=True)
         self.paren_start('def %s(' % node.name)
         self.visit_arguments(node.args)
-        self.paren_end('):')
+        self.paren_end()
+        if PY3 and node.returns is not None:
+            self.write(self.ARROW)
+            self.visit(node.returns)
+        self.write(':')
         self.body(node.body)
+
+    def visit_arguments(self, node):
+        sep = Sep(self.COMMA)
+        padding = [None] * (len(node.args) - len(node.defaults))
+        if PY3:
+            for arg, default in zip(node.args, padding + node.defaults):
+                self.write(sep())
+                self.visit(arg)
+                if default is not None:
+                    self.write('=')
+                    self.visit(default)
+            if node.vararg is not None:
+                self.write(sep())
+                self.maybe_break(node.vararg)
+                self.write('*')
+                self.visit(node.vararg)
+            elif node.kwonlyargs:
+                self.write(sep() + '*')
+
+            padding = [None] * (len(node.kwonlyargs) - len(node.kw_defaults))
+            for arg, default in zip(node.kwonlyargs, padding + node.kw_defaults):
+                self.write(sep())
+                self.visit(arg)
+                if default is not None:
+                    self.write('=')
+                    self.visit(default)
+            if node.kwarg is not None:
+                self.write(sep() + '**')
+                self.visit(node.kwarg)
+        else:
+            for arg, default in zip(node.args, padding + node.defaults):
+                self.write(sep())
+                self.visit(arg)
+                if default is not None:
+                    self.write('=')
+                    self.visit(default)
+            if node.vararg is not None:
+                self.write(sep())
+                self.write('*' + node.vararg)
+            if node.kwarg is not None:
+                self.write(sep())
+                self.write('**' + node.kwarg)
+
+    def visit_arg(self, node):
+        # Py3 only
+        self.maybe_break(node)
+        self.write(node.arg)
+        if node.annotation is not None:
+            self.write(self.COLON)
+            self.visit(node.annotation)
 
     def visit_ClassDef(self, node):
         self.newline(extra=2)
@@ -426,12 +462,6 @@ class SourceGenerator(NodeVisitor):
         self.write(':')
         self.body(node.body)
 
-    def visit_arg(self, node):
-        self.write(node.arg)
-        if node.annotation is not None:
-            self.write(self.COLON)
-            self.visit(node.annotation)
-
     def visit_If(self, node):
         self.newline(node, body=True)
         self.write('if ')
@@ -440,7 +470,7 @@ class SourceGenerator(NodeVisitor):
         self.body(node.body)
         while True:
             if len(node.orelse) == 1 and isinstance(node.orelse[0], If):
-                node = else_[0]
+                node = node.orelse[0]
                 self.newline(node.test, body=True)
                 self.write('elif ')
                 self.visit(node.test)
