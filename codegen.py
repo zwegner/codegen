@@ -11,7 +11,7 @@
 import sys
 PY3 = sys.version_info >= (3, 0)
 # These might not exist, so we put them equal to NoneType
-TryExcept = TryFinally = YieldFrom = MatMult = type(None)
+Try = TryExcept = TryFinally = YieldFrom = MatMult = type(None)
 
 from ast import *
 
@@ -109,7 +109,7 @@ class SourceGenerator(NodeVisitor):
         USub:       ('-',    13)
     }
 
-    BLOCK_NODES = (If, For, While, With, TryExcept, TryFinally,
+    BLOCK_NODES = (If, For, While, With, Try, TryExcept, TryFinally,
                    FunctionDef, ClassDef)
 
     def __init__(self, indent_with, add_line_information=False, correct_line_numbers=False, line_number=1):
@@ -130,13 +130,14 @@ class SourceGenerator(NodeVisitor):
         # Can we insert a newline here without having to escape it?
         # (are we between delimiting characters)
         self.can_newline = False
-        # After a colon (but before a newline or another statement) we don't
-        # have to insert a semicolon
-        self.after_block = True
-        # Should a newline be forced the next opportunity for one (this can
-        # happen because we're at the end of a block, before a statement having
-        # a block, or the first line of a statement having a block if said block
-        # contains a block-having statement anywhere)
+        # after a colon, we don't have to print a semi colon. set when self.body() is called
+        self.after_colon = False
+        # reset by a call to self.newline, set by the first call to write() afterwards
+        # determines if we have to print the newlines and indent
+        self.indented = False
+        # the amount of newlines to be printed
+        self.newlines = 0
+        # force the printing of a proper newline (and not a semicolon)
         self.force_newline = False
 
     def process(self, node):
@@ -174,8 +175,8 @@ class SourceGenerator(NodeVisitor):
 
     def paren_start(self, symbol='('):
         self.precedence_stack.append([0, self.can_newline, None])
-        self.can_newline = True
         self.write(symbol)
+        self.can_newline = True
 
     def paren_end(self, symbol=')'):
         _, self.can_newline, _ = self.precedence_stack.pop()
@@ -186,14 +187,42 @@ class SourceGenerator(NodeVisitor):
     def write(self, x):
         if not x:
             return
-        if self.new_lines:
-            if self.result or self.correct_line_numbers:
-                self.result.append('\n' * self.new_lines)
+
+        if self.correct_line_numbers:
+            if not self.indented:
+                self.new_lines = max(self.new_lines, 1 if self.force_newline else 0)
+                self.force_newline = False
+
+                if self.new_lines:
+                    # we have new lines to print
+                    self.result.append('\n' * self.new_lines)
+                    self.result.append(self.indent_with * self.indentation)
+                elif self.after_colon:
+                    # we're directly after a block-having statement and can write on the same line
+                    self.result.append(' ')
+                elif self.result:
+                    # we're after any statement. or at the start of the file
+                    self.result.append(self.SEMICOLON)
+                self.indented = True
+                self.after_colon = False
+            elif self.new_lines > 0:
+                if self.can_newline:
+                    self.result.append('\n' * self.new_lines)
+                    self.result.append(self.indent_with * (self.indentation + 1))
+                else:
+                    self.result.append('\\\n' * self.new_lines)
+                    self.result.append(self.indent_with * (self.indentation + 1))
+            self.new_lines = 0
+
+
+        elif self.new_lines:
+            # normal behaviour
+            self.result.append('\n' * self.new_lines)
             self.result.append(self.indent_with * self.indentation)
             self.new_lines = 0
         self.result.append(x)
 
-    def newline(self, node=None, extra=0, body=False):
+    def newline(self, node=None, extra=0, force=False):
         if not self.correct_line_numbers:
             self.new_lines = max(self.new_lines, 1 + extra)
             if node is not None and self.add_line_information:
@@ -203,83 +232,47 @@ class SourceGenerator(NodeVisitor):
             if extra:
                 #Ignore extra
                 return
-            # Statements which have a block
-            elif node is None:
-                # else or finally statements which do not have a recorded line number
-                # Assume they're right after the previous statement
-                # alternatively it might be possible to place them before the next statement
-                self.new_lines = 1
+
+            self.indented = False
+
+            if node is None:
+                # else/finally statement. insert one true newline. body is implicit
+                self.force_newline = True
+                self.new_lines += 1
                 self.line_number += 1
 
-            elif body:
-                self.new_lines = node.lineno - self.line_number + self.new_lines
-                if self.new_lines <= 0 and self.result:
-                    # can't have block-having statements on the same line as the previous statement
-                    # unless it's the first line
-                    self.new_lines = 1
+            elif force:
+                # statement with a block: needs a true newline before it
+                self.force_newline = True
+                self.new_lines += node.lineno - self.line_number
                 self.line_number = node.lineno
 
             else:
-                self.new_lines = node.lineno - self.line_number + self.new_lines
-                if self.new_lines < 0:
-                    # Weird ast with linenumbers going back in time. lets
-                    # not do that
-                    self.new_lines = 0
+                # block-less statement: needs a semicolon, colon, or newline in front of it
+                self.new_lines += node.lineno - self.line_number
                 self.line_number = node.lineno
-
-                if not self.new_lines:
-                    # If we're not following a block start we need a semicolon
-                    if self.force_newline:
-                        self.new_lines = 1
-                    elif not self.after_block:
-                        self.write(self.SEMICOLON)
-                    elif self.result:
-                        self.write(' ')
-                self.after_block = False
-                self.force_newline = False
 
     def maybe_break(self, node):
         if self.correct_line_numbers:
-            # can't break a line before anything has even been printed in it
-            # This can be triggered by things like (\n1)
-            new_lines = self.new_lines
-            if self.new_lines:
-                self.write('')
-
-            if node.lineno > self.line_number:
-                self.newline(node)
-                if not self.can_newline:
-                    # Syntactically we're not allowed to newline here,
-                    # but since evidently a newline happened here
-                    # use an escaped newline to correct for it
-                    # This can happen when statemens are parenthesized
-                    # Just to cross newline boundaries, but that's
-                    # impossible to distinguish and hard to parse
-                    self.result.append('\\\n' * self.new_lines)
-                    if not new_lines:
-                        # if something was already printed we can indent safely
-                        self.result.append(self.indent_with * (self.indentation + 1))
-                else:
-                    self.result.append('\n' * self.new_lines)
-                    self.result.append(self.indent_with * (self.indentation + 1))
-                self.new_lines = 0
+            self.new_lines += node.lineno - self.line_number
+            self.line_number = node.lineno
 
     def body(self, statements):
         self.force_newline = (any(isinstance(i, self.BLOCK_NODES) for i in statements) or
                               (any(i.lineno > self.line_number for i in statements) and
                               self.correct_line_numbers))
         self.indentation += 1
-        self.after_block = not self.force_newline
+        self.after_colon = not self.force_newline
         for stmt in statements:
             self.visit(stmt)
         self.indentation -= 1
         self.force_newline = True
-        self.after_block = False # do empty blocks even exist?
+        self.after_colon = False # do empty blocks even exist?
 
     def body_or_else(self, node):
         self.body(node.body)
         if node.orelse:
-            self.newline(body=True)
+            self.newline()
             self.write('else:')
             self.body(node.orelse)
 
@@ -292,10 +285,13 @@ class SourceGenerator(NodeVisitor):
 
     def decorators(self, node):
         for decorator in node.decorator_list:
-            self.force_newline = True
-            self.newline(decorator)
+            self.newline(decorator, force=True)
             self.write('@')
             self.visit(decorator)
+        if node.decorator_list:
+            self.newline()
+        else:
+            self.newline(node, force=True)
 
     # Module
     def visit_Module(self, node):
@@ -315,7 +311,7 @@ class SourceGenerator(NodeVisitor):
 
     def visit_Assign(self, node):
         self.newline(node)
-        for idx, target in enumerate(node.targets):
+        for target in node.targets:
             self.visit_bare(target)
             self.write(self.ASSIGN)
         self.visit(node.value)
@@ -366,8 +362,8 @@ class SourceGenerator(NodeVisitor):
 
     def visit_FunctionDef(self, node):
         self.newline(extra=1)
+        # first decorator line number will be used
         self.decorators(node)
-        self.newline(node, body=True)
         self.paren_start('def %s(' % node.name)
         self.visit_arguments(node.args)
         self.paren_end()
@@ -428,8 +424,8 @@ class SourceGenerator(NodeVisitor):
 
     def visit_ClassDef(self, node):
         self.newline(extra=2)
+        # first decorator line number will be used
         self.decorators(node)
-        self.newline(node, body=True)
         self.write('class %s' % node.name)
 
         if node.bases or (hasattr(node, "keywords") and 
@@ -463,7 +459,7 @@ class SourceGenerator(NodeVisitor):
         self.body(node.body)
 
     def visit_If(self, node):
-        self.newline(node, body=True)
+        self.newline(node, force=True)
         self.write('if ')
         self.visit(node.test)
         self.write(':')
@@ -471,20 +467,20 @@ class SourceGenerator(NodeVisitor):
         while True:
             if len(node.orelse) == 1 and isinstance(node.orelse[0], If):
                 node = node.orelse[0]
-                self.newline(node.test, body=True)
+                self.newline(node.test, force=True)
                 self.write('elif ')
                 self.visit(node.test)
                 self.write(':')
                 self.body(node.body)
             else:
                 if node.orelse:
-                    self.newline(body=True)
+                    self.newline()
                     self.write('else:')
                     self.body(node.orelse)
                 break
 
     def visit_For(self, node):
-        self.newline(node, body=True)
+        self.newline(node, force=True)
         self.write('for ')
         self.visit_bare(node.target)
         self.write(' in ')
@@ -493,14 +489,14 @@ class SourceGenerator(NodeVisitor):
         self.body_or_else(node)
 
     def visit_While(self, node):
-        self.newline(node, body=True)
+        self.newline(node, force=True)
         self.write('while ')
         self.visit(node.test)
         self.write(':')
         self.body_or_else(node)
 
     def visit_With(self, node):
-        self.newline(node, body=True)
+        self.newline(node, force=True)
         self.write('with ')
 
         if hasattr(node, 'items'):
@@ -556,18 +552,18 @@ class SourceGenerator(NodeVisitor):
         # Python 3 only. exploits the fact that TryExcept uses the same attribute names
         self.visit_TryExcept(node)
         if node.finalbody:
-            self.newline(body=True)
+            self.newline()
             self.write('finally:')
             self.body(node.finalbody)
 
     def visit_TryExcept(self, node):
-        self.newline(node, body=True)
+        self.newline(node, force=True)
         self.write('try:')
         self.body(node.body)
         for handler in node.handlers:
             self.visit(handler)
         if node.orelse:
-            self.newline(body=True)
+            self.newline()
             self.write('else:')
             self.body(node.orelse)
 
@@ -576,15 +572,15 @@ class SourceGenerator(NodeVisitor):
         if len(node.body) == 1 and isinstance(node.body[0], TryExcept):
             self.visit_TryExcept(node.body[0])
         else:
-            self.newline(node, body=True)
+            self.newline(node, force=True)
             self.write('try:')
             self.body(node.body)
-        self.newline(body=True)
+        self.newline()
         self.write('finally:')
         self.body(node.finalbody)
 
     def visit_ExceptHandler(self, node):
-        self.newline(node, body=True)
+        self.newline(node, force=True)
         self.write('except')
         if node.type:
             self.write(' ')
@@ -647,6 +643,7 @@ class SourceGenerator(NodeVisitor):
     # Expressions
 
     def visit_Attribute(self, node):
+        self.maybe_break(node)
         # Edge case: due to the use of \d*[.]\d* for floats \d*[.]\w*, you have
         # to put parenthesis around an integer literal do get an attribute from it
         if isinstance(node.value, Num):
@@ -660,6 +657,7 @@ class SourceGenerator(NodeVisitor):
         self.write('.' + node.attr)
 
     def visit_Call(self, node):
+        self.maybe_break(node)
         #need to put parenthesis around numbers being called (this makes no sense)
         if isinstance(node.func, Num):
             self.paren_start()
@@ -748,6 +746,7 @@ class SourceGenerator(NodeVisitor):
 
     def _sequence_visit(left, right): # pylint: disable=E0213
         def visit(self, node):
+            self.maybe_break(node)
             self.paren_start(left)
             sep = Sep(self.COMMA)
             for item in node.elts:
@@ -760,11 +759,11 @@ class SourceGenerator(NodeVisitor):
     visit_Set = _sequence_visit('{', '}')
 
     def visit_Dict(self, node):
+        self.maybe_break(node)
         self.paren_start('{')
         sep = Sep(self.COMMA)
         for key, value in zip(node.keys, node.values):
             self.write(sep())
-            self.maybe_break(value)
             self.visit(key)
             self.write(self.COLON)
             self.visit(value)
@@ -808,6 +807,7 @@ class SourceGenerator(NodeVisitor):
         self.prec_end()
 
     def visit_UnaryOp(self, node):
+        self.maybe_break(node)
         symbol, precedence = self.UNARYOP_SYMBOLS[type(node.op)]
         self.prec_start(precedence)
         self.write(symbol)
@@ -838,6 +838,7 @@ class SourceGenerator(NodeVisitor):
         self.paren_end(']')
 
     def visit_Index(self, node, guard=False):
+        # Index has no lineno information
         # When a subscript includes a tuple directly, the parenthesis can be dropped
         if not guard:
             self.visit_bare(node.value)
@@ -845,6 +846,7 @@ class SourceGenerator(NodeVisitor):
             self.visit(node.value)
 
     def visit_Slice(self, node):
+        # Slice has no lineno information
         if node.lower is not None:
             self.visit(node.lower)
         self.write(':')
@@ -860,6 +862,7 @@ class SourceGenerator(NodeVisitor):
         self.write('...')
 
     def visit_ExtSlice(self, node):
+        # Extslice has no lineno information
         for idx, item in enumerate(node.dims):
             if idx:
                 self.write(self.COMMA)
