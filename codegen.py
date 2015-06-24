@@ -130,8 +130,9 @@ class SourceGenerator(NodeVisitor):
         # Can we insert a newline here without having to escape it?
         # (are we between delimiting characters)
         self.can_newline = False
-        # after a colon, we don't have to print a semi colon. set when self.body() is called
-        self.after_colon = False
+        # after a colon, we don't have to print a semi colon. set to 1 when self.body() is called,
+        # set to 2 or 0 when it's actually used. set to 0 at the end of the body
+        self.after_colon = 0
         # reset by a call to self.newline, set by the first call to write() afterwards
         # determines if we have to print the newlines and indent
         self.indented = False
@@ -185,9 +186,12 @@ class SourceGenerator(NodeVisitor):
     # convenience functions
 
     def write(self, x):
+        # ignore empty writes
         if not x:
             return
 
+        # Before we write, we must check if newlines have been queued.
+        # If this is the case, we have to handle them properly
         if self.correct_line_numbers:
             if not self.indented:
                 self.new_lines = max(self.new_lines, 1 if self.force_newline else 0)
@@ -195,16 +199,20 @@ class SourceGenerator(NodeVisitor):
 
                 if self.new_lines:
                     # we have new lines to print
-                    self.result.append('\n' * self.new_lines)
+                    if self.after_colon == 2:
+                        self.result.append(';'+'\\\n' * self.new_lines)
+                    else:
+                        self.after_colon = 0
+                        self.result.append('\n' * self.new_lines)
                     self.result.append(self.indent_with * self.indentation)
-                elif self.after_colon:
+                elif self.after_colon == 1:
                     # we're directly after a block-having statement and can write on the same line
+                    self.after_colon = 2
                     self.result.append(' ')
                 elif self.result:
                     # we're after any statement. or at the start of the file
                     self.result.append(self.SEMICOLON)
                 self.indented = True
-                self.after_colon = False
             elif self.new_lines > 0:
                 if self.can_newline:
                     self.result.append('\n' * self.new_lines)
@@ -258,16 +266,14 @@ class SourceGenerator(NodeVisitor):
             self.line_number = node.lineno
 
     def body(self, statements):
-        self.force_newline = (any(isinstance(i, self.BLOCK_NODES) for i in statements) or
-                              (any(i.lineno > self.line_number for i in statements) and
-                              self.correct_line_numbers))
+        self.force_newline = any(isinstance(i, self.BLOCK_NODES) for i in statements)
         self.indentation += 1
-        self.after_colon = not self.force_newline
+        self.after_colon = 1
         for stmt in statements:
             self.visit(stmt)
         self.indentation -= 1
         self.force_newline = True
-        self.after_colon = False # do empty blocks even exist?
+        self.after_colon = 0 # do empty blocks even exist?
 
     def body_or_else(self, node):
         self.body(node.body)

@@ -8,8 +8,7 @@ modules. Next to this it also can perform line-number accurate decompilation.
 
 For a more powerful alternative, take a look at [astor](http://github.com/berkerpeksag/astor).
 
-The library is able to correctly round-trip the python standard library for both python 2.7 and 3.4
-in normal operation. Line-number correct compilation works largely, but still has a few oddities.
+The library is able to correctly round-trip the python standard library for both python 2.7 and 3.4.
 
 ## License
 
