@@ -62,7 +62,6 @@ class SourceGenerator(NodeVisitor):
     """
 
     COMMA = ', '
-    TRAILING_COMMA = ','
     COLON = ': '
     ASSIGN = ' = '
     SEMICOLON = '; '
@@ -233,6 +232,8 @@ class SourceGenerator(NodeVisitor):
     def newline(self, node=None, extra=0, force=False):
         if not self.correct_line_numbers:
             self.new_lines = max(self.new_lines, 1 + extra)
+            if not self.result:
+                self.new_lines = 0
             if node is not None and self.add_line_information:
                 self.write('# line: %s' % node.lineno)
                 self.new_lines = 1
@@ -391,7 +392,7 @@ class SourceGenerator(NodeVisitor):
         self.paren_start()
         self.visit_arguments(node.args)
         self.paren_end()
-        if PY3 and node.returns is not None:
+        if hasattr(node, 'returns') and node.returns is not None:
             self.write(self.ARROW)
             self.visit(node.returns)
         self.write(':')
@@ -599,7 +600,7 @@ class SourceGenerator(NodeVisitor):
             self.write(sep())
             self.visit(value)
         if not node.nl:
-            self.write(self.TRAILING_COMMA)
+            self.write(',')
 
     def visit_Delete(self, node):
         self.newline(node)
@@ -801,7 +802,7 @@ class SourceGenerator(NodeVisitor):
             self.write(sep())
             self.visit(item)
         if len(node.elts) == 1:
-            self.write(self.TRAILING_COMMA)
+            self.write(',')
         if guard or not node.elts:
             self.paren_end()
 
@@ -1021,10 +1022,7 @@ class SourceGenerator(NodeVisitor):
     def visit_comprehension(self, node):
         self.maybe_break(node.target)
         self.write(' for ')
-        if PY3:
-            self.visit_bare(node.target)
-        else:
-            self.visit(node.target)
+        self.visit_bare(node.target)
         self.write(' in ')
         # workaround: lambda and ternary need to be within parenthesis here
         self.prec_start(3)
