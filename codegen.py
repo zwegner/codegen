@@ -11,7 +11,7 @@
 import sys
 PY3 = sys.version_info >= (3, 0)
 # These might not exist, so we put them equal to NoneType
-Try = TryExcept = TryFinally = YieldFrom = MatMult = type(None)
+Try = TryExcept = TryFinally = YieldFrom = MatMult = Await = type(None)
 
 from ast import *
 
@@ -47,7 +47,7 @@ def to_source(node, indent_with=' ' * 4, add_line_information=False, correct_lin
     number information of statement nodes.
     """
     if correct_line_numbers:
-        if hasattr(node, "lineno"):
+        if hasattr(node, 'lineno'):
             return SourceGenerator(indent_with, add_line_information, True, node.lineno).process(node)
         else:
             return SourceGenerator(indent_with, add_line_information, True).process(node)
@@ -328,6 +328,15 @@ class SourceGenerator(NodeVisitor):
         self.write(self.BINOP_SYMBOLS[type(node.op)][0].strip() + '=')
         self.visit(node.value)
 
+    def visit_Await(self, node, paren=True):
+        self.maybe_break(node)
+        if paren:
+            self.paren_start()
+        self.write('await ')
+        self.visit(node.value)
+        if paren:
+            self.paren_end()
+
     def visit_ImportFrom(self, node):
         self.newline(node)
         self.write('from ')
@@ -363,14 +372,23 @@ class SourceGenerator(NodeVisitor):
             self.visit_Yield(node.value, False)
         elif isinstance(node.value, YieldFrom):
             self.visit_YieldFrom(node.value, False)
+        elif isinstance(node.value, Await):
+            self.visit_Await(node.value, False)
         else:
             self.visit_bare(node.value)
 
-    def visit_FunctionDef(self, node):
+    def visit_AsyncFunctionDef(self, node):
+        self.visit_FunctionDef(node, True)
+
+    def visit_FunctionDef(self, node, async=False):
         self.newline(extra=1)
         # first decorator line number will be used
         self.decorators(node)
-        self.paren_start('def %s(' % node.name)
+        if async:
+            self.write('async ')
+        self.write('def ')
+        self.write(node.name)
+        self.paren_start()
         self.visit_arguments(node.args)
         self.paren_end()
         if PY3 and node.returns is not None:
@@ -382,7 +400,7 @@ class SourceGenerator(NodeVisitor):
     def visit_arguments(self, node):
         sep = Sep(self.COMMA)
         padding = [None] * (len(node.args) - len(node.defaults))
-        if PY3:
+        if hasattr(node, 'kwonlyargs'):
             for arg, default in zip(node.args, padding + node.defaults):
                 self.write(sep())
                 self.visit(arg)
@@ -391,9 +409,18 @@ class SourceGenerator(NodeVisitor):
                     self.visit(default)
             if node.vararg is not None:
                 self.write(sep())
-                self.maybe_break(node.vararg)
-                self.write('*')
-                self.visit(node.vararg)
+                if hasattr(node, 'varargannotation'):
+                    if node.varargannotation is None:
+                        self.write('*' + node.vararg)
+                    else:
+                        self.maybe_break(node.varargannotation)
+                        self.write('*' + node.vararg)
+                        self.write(self.COLON)
+                        self.visit(node.varargannotation)
+                else:
+                    self.maybe_break(node.vararg)
+                    self.write('*')
+                    self.visit(node.vararg)
             elif node.kwonlyargs:
                 self.write(sep() + '*')
 
@@ -404,8 +431,19 @@ class SourceGenerator(NodeVisitor):
                     self.write('=')
                     self.visit(default)
             if node.kwarg is not None:
-                self.write(sep() + '**')
-                self.visit(node.kwarg)
+                self.write(sep())
+                if hasattr(node, 'kwargannotation'):
+                    if node.kwargannotation is None:
+                        self.write('**' + node.kwarg)
+                    else:
+                        self.maybe_break(node.kwargannotation)
+                        self.write('**' + node.kwarg)
+                        self.write(self.COLON)
+                        self.visit(node.kwargannotation)
+                else:
+                    self.maybe_break(node.kwarg)
+                    self.write('**')
+                    self.visit(node.kwarg)
         else:
             for arg, default in zip(node.args, padding + node.defaults):
                 self.write(sep())
@@ -428,14 +466,22 @@ class SourceGenerator(NodeVisitor):
             self.write(self.COLON)
             self.visit(node.annotation)
 
+    def visit_keyword(self, node):
+        self.maybe_break(node.value)
+        if node.arg is not None:
+            self.write(node.arg + '=')
+        else:
+            self.write('**')
+        self.visit(node.value)
+
     def visit_ClassDef(self, node):
         self.newline(extra=2)
         # first decorator line number will be used
         self.decorators(node)
         self.write('class %s' % node.name)
 
-        if node.bases or (hasattr(node, "keywords") and 
-                          (node.keywords or node.starargs or node.kwargs)):
+        if (node.bases or (hasattr(node, 'keywords') and node.keywords) or
+                (hasattr(node, 'starargs') and (node.starargs or node.kwargs))):
             self.paren_start()
             sep = Sep(self.COMMA)
 
@@ -447,19 +493,18 @@ class SourceGenerator(NodeVisitor):
             if hasattr(node, 'keywords'):
                 for keyword in node.keywords:
                     self.write(sep())
-                    self.maybe_break(keyword.value)
-                    self.write(keyword.arg + '=')
-                    self.visit(keyword.value)
-                if node.starargs is not None:
-                    self.write(sep())
-                    self.maybe_break(node.starargs)
-                    self.write('*')
-                    self.visit(node.starargs)
-                if node.kwargs is not None:
-                    self.write(sep())
-                    self.maybe_break(node.kwargs)
-                    self.write('**')
-                    self.visit(node.kwargs)
+                    self.visit(keyword)
+                if hasattr(node, 'starargs'):
+                    if node.starargs is not None:
+                        self.write(sep())
+                        self.maybe_break(node.starargs)
+                        self.write('*')
+                        self.visit(node.starargs)
+                    if node.kwargs is not None:
+                        self.write(sep())
+                        self.maybe_break(node.kwargs)
+                        self.write('**')
+                        self.visit(node.kwargs)
             self.paren_end()
         self.write(':')
         self.body(node.body)
@@ -485,8 +530,13 @@ class SourceGenerator(NodeVisitor):
                     self.body(node.orelse)
                 break
 
-    def visit_For(self, node):
+    def visit_AsyncFor(self, node):
+        self.visit_For(node, True)
+
+    def visit_For(self, node, async=False):
         self.newline(node, force=True)
+        if async:
+            self.write('async ')
         self.write('for ')
         self.visit_bare(node.target)
         self.write(' in ')
@@ -501,8 +551,13 @@ class SourceGenerator(NodeVisitor):
         self.write(':')
         self.body_or_else(node)
 
-    def visit_With(self, node):
+    def visit_AsyncWith(self, node):
+        self.visit_With(node, True)
+
+    def visit_With(self, node, async=False):
         self.newline(node, force=True)
+        if async:
+            self.write('async ')
         self.write('with ')
 
         if hasattr(node, 'items'):
@@ -675,7 +730,8 @@ class SourceGenerator(NodeVisitor):
             self.prec_end()
         # special case generator expressions as only argument
         if (len(node.args) == 1 and isinstance(node.args[0], GeneratorExp) and
-                not node.keywords and not node.starargs and not node.kwargs):
+                not node.keywords and hasattr(node, 'starargs') and 
+                not node.starargs and not node.kwargs):
             self.visit_GeneratorExp(node.args[0])
             return
 
@@ -687,19 +743,18 @@ class SourceGenerator(NodeVisitor):
             self.visit(arg)
         for keyword in node.keywords:
             self.write(sep())
-            self.maybe_break(keyword.value)
-            self.write(keyword.arg + '=')
-            self.visit(keyword.value)
-        if node.starargs is not None:
-            self.write(sep())
-            self.maybe_break(node.starargs)
-            self.write('*')
-            self.visit(node.starargs)
-        if node.kwargs is not None:
-            self.write(sep())
-            self.maybe_break(node.kwargs)
-            self.write('**')
-            self.visit(node.kwargs)
+            self.visit(keyword)
+        if hasattr(node, 'starargs'):
+            if node.starargs is not None:
+                self.write(sep())
+                self.maybe_break(node.starargs)
+                self.write('*')
+                self.visit(node.starargs)
+            if node.kwargs is not None:
+                self.write(sep())
+                self.maybe_break(node.kwargs)
+                self.write('**')
+                self.visit(node.kwargs)
         self.paren_end()
 
     def visit_Name(self, node):
