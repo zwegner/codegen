@@ -68,44 +68,44 @@ class SourceGenerator(NodeVisitor):
     ARROW = ' -> '
 
     BOOLOP_SYMBOLS = {
-        And:        (' and ', 4),
-        Or:         (' or ',  3)
+        And:        (' and ', 5),
+        Or:         (' or ',  4)
     }
 
     BINOP_SYMBOLS = {
-        Add:        (' + ',  11),
-        Sub:        (' - ',  11),
-        Mult:       (' * ',  12),
-        MatMult:    (' @ ',  12),
-        Div:        (' / ',  12),
-        FloorDiv:   (' // ', 12),
-        Mod:        (' % ',  12),
-        Pow:        (' ** ', 14),
-        LShift:     (' << ', 10),
-        RShift:     (' >> ', 10),
-        BitOr:      (' | ',  7),
-        BitAnd:     (' & ',  9),
-        BitXor:     (' ^ ',  8)
+        Add:        (' + ',  12),
+        Sub:        (' - ',  12),
+        Mult:       (' * ',  13),
+        MatMult:    (' @ ',  13),
+        Div:        (' / ',  13),
+        FloorDiv:   (' // ', 13),
+        Mod:        (' % ',  13),
+        Pow:        (' ** ', 15),
+        LShift:     (' << ', 11),
+        RShift:     (' >> ', 11),
+        BitOr:      (' | ',  8),
+        BitAnd:     (' & ',  10),
+        BitXor:     (' ^ ',  9)
     }
 
     CMPOP_SYMBOLS = {
-        Eq:         (' == ',     6),
-        Gt:         (' > ',      6),
-        GtE:        (' >= ',     6),
-        In:         (' in ',     6),
-        Is:         (' is ',     6),
-        IsNot:      (' is not ', 6),
-        Lt:         (' < ',      6),
-        LtE:        (' <= ',     6),
-        NotEq:      (' != ',     6),
-        NotIn:      (' not in ', 6)
+        Eq:         (' == ',     7),
+        Gt:         (' > ',      7),
+        GtE:        (' >= ',     7),
+        In:         (' in ',     7),
+        Is:         (' is ',     7),
+        IsNot:      (' is not ', 7),
+        Lt:         (' < ',      7),
+        LtE:        (' <= ',     7),
+        NotEq:      (' != ',     7),
+        NotIn:      (' not in ', 7)
     }
 
     UNARYOP_SYMBOLS = {
-        Invert:     ('~',    13),
-        Not:        ('not ', 5),
-        UAdd:       ('+',    13),
-        USub:       ('-',    13)
+        Invert:     ('~',    14),
+        Not:        ('not ', 6),
+        UAdd:       ('+',    14),
+        USub:       ('-',    14)
     }
 
     BLOCK_NODES = (If, For, While, With, Try, TryExcept, TryFinally,
@@ -290,6 +290,14 @@ class SourceGenerator(NodeVisitor):
         else:
             self.visit(node)
 
+    def visit_bareyield(self, node):
+        if isinstance(node, Yield):
+            self.visit_Yield(node, False)
+        elif isinstance(node, YieldFrom):
+            self.visit_YieldFrom(node, False)
+        else:
+            self.visit_bare(node)
+
     def decorators(self, node):
         for decorator in node.decorator_list:
             self.newline(decorator, force=True)
@@ -321,22 +329,21 @@ class SourceGenerator(NodeVisitor):
         for target in node.targets:
             self.visit_bare(target)
             self.write(self.ASSIGN)
-        self.visit(node.value)
+        self.visit_bareyield(node.value)
 
     def visit_AugAssign(self, node):
         self.newline(node)
-        self.visit(node.target)
+        self.visit_bare(node.target)
         self.write(self.BINOP_SYMBOLS[type(node.op)][0].strip() + '=')
-        self.visit(node.value)
+        self.visit_bareyield(node.value)
 
-    def visit_Await(self, node, paren=True):
+    def visit_Await(self, node):
         self.maybe_break(node)
-        if paren:
-            self.paren_start()
+        self.prec_start(16, True)
+        self.prec_middle()
         self.write('await ')
         self.visit(node.value)
-        if paren:
-            self.paren_end()
+        self.prec_end()
 
     def visit_ImportFrom(self, node):
         self.newline(node)
@@ -369,14 +376,7 @@ class SourceGenerator(NodeVisitor):
 
     def visit_Expr(self, node):
         self.newline(node)
-        if isinstance(node.value, Yield):
-            self.visit_Yield(node.value, False)
-        elif isinstance(node.value, YieldFrom):
-            self.visit_YieldFrom(node.value, False)
-        elif isinstance(node.value, Await):
-            self.visit_Await(node.value, False)
-        else:
-            self.visit_bare(node.value)
+        self.visit_bareyield(node.value)
 
     def visit_AsyncFunctionDef(self, node):
         self.visit_FunctionDef(node, True)
@@ -713,7 +713,7 @@ class SourceGenerator(NodeVisitor):
             self.visit(node.value)
             self.paren_end()
         else:
-            self.prec_start(15)
+            self.prec_start(17)
             self.visit(node.value)
             self.prec_end()
         self.write('.' + node.attr)
@@ -726,7 +726,7 @@ class SourceGenerator(NodeVisitor):
             self.visit_Num(node.func)
             self.paren_end()
         else:
-            self.prec_start(15)
+            self.prec_start(17)
             self.visit(node.func)
             self.prec_end()
         # special case generator expressions as only argument
@@ -839,7 +839,7 @@ class SourceGenerator(NodeVisitor):
         # work around python's negative integer literal optimization
         if isinstance(node.op, Pow):
             self.visit(node.left)
-            self.prec_middle(13)
+            self.prec_middle(14)
         else:
             self.visit(node.left)
             self.prec_middle()
@@ -860,7 +860,7 @@ class SourceGenerator(NodeVisitor):
 
     def visit_Compare(self, node):
         self.maybe_break(node)
-        self.prec_start(6, True)
+        self.prec_start(7, True)
         self.prec_middle()
         self.visit(node.left)
         for op, right in zip(node.ops, node.comparators):
@@ -892,7 +892,7 @@ class SourceGenerator(NodeVisitor):
             self.visit_Num(node.value)
             self.paren_end()
         else:
-            self.prec_start(15)
+            self.prec_start(17)
             self.visit(node.value)
             self.prec_end()
         self.paren_start('[')
@@ -947,6 +947,9 @@ class SourceGenerator(NodeVisitor):
             self.paren_end()
 
     def visit_YieldFrom(self, node, paren=True):
+        # Even though yield and yield from technically occupy precedence level 1, certain code
+        # using them is illegal e.g. "return yield from a()" will not work unless you 
+        # put the yield from statement within parenthesis. 
         self.maybe_break(node)
         if paren:
             self.paren_start()
@@ -957,7 +960,7 @@ class SourceGenerator(NodeVisitor):
 
     def visit_Lambda(self, node):
         self.maybe_break(node)
-        self.prec_start(1)
+        self.prec_start(2)
         self.write('lambda ')
         self.visit_arguments(node.args)
         self.write(self.COLON)
@@ -990,11 +993,11 @@ class SourceGenerator(NodeVisitor):
 
     def visit_IfExp(self, node):
         self.maybe_break(node)
-        self.prec_start(2, False)
+        self.prec_start(3, False)
         self.visit(node.body)
         self.write(' if ')
         self.visit(node.test)
-        self.prec_middle(1)
+        self.prec_middle(2)
         self.write(' else ')
         self.visit(node.orelse)
         self.prec_end()
@@ -1025,7 +1028,7 @@ class SourceGenerator(NodeVisitor):
         self.visit_bare(node.target)
         self.write(' in ')
         # workaround: lambda and ternary need to be within parenthesis here
-        self.prec_start(3)
+        self.prec_start(4)
         self.visit(node.iter)
         self.prec_end()
 
