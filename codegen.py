@@ -334,7 +334,7 @@ class SourceGenerator(NodeVisitor):
     def visit_AugAssign(self, node):
         self.newline(node)
         self.visit_bare(node.target)
-        self.write(self.BINOP_SYMBOLS[type(node.op)][0].strip() + '=')
+        self.write(self.BINOP_SYMBOLS[type(node.op)][0].rstrip() + self.ASSIGN.lstrip())
         self.visit_bareyield(node.value)
 
     def visit_Await(self, node):
