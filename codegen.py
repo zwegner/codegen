@@ -766,13 +766,51 @@ class SourceGenerator(NodeVisitor):
         self.maybe_break(node)
         self.write(repr(node.value))
 
-    def visit_Str(self, node):
+    def visit_Str(self, node, frombytes=False):
         self.maybe_break(node)
-        self.write(repr(node.s))
+        if frombytes:
+            newline_count = node.s.count('\n'.encode('utf-8'))
+        else:
+            newline_count = node.s.count('\n')
+
+        # heuristic, expand when more than 1 newline and when at least 80%
+        # of the characters aren't newlines
+        expand = newline_count > 1 and len(node.s) > 5 * newline_count
+        if self.correct_line_numbers:
+            # Also check if we have enougn newlines to expand in if we're going for correct line numbers
+            if self.after_colon:
+                # Although this makes little sense just after a colon
+                expand = expand and self.new_lines > newline_count
+            else:
+                expand = expand and self.new_lines >= newline_count
+
+        if expand and (not self.correct_line_numbers or self.new_lines >= newline_count):
+            if self.correct_line_numbers:
+                self.new_lines -= newline_count
+
+            a = repr(node.s)
+            delimiter = a[-1]
+            header, content = a[:-1].split(delimiter, 1)
+            lines = []
+            chain = False
+            for i in content.split('\\n'):
+                if chain:
+                    i = lines.pop() + i
+                    chain = False
+                if (len(i) - len(i.rstrip('\\'))) % 2:
+                    i += '\\n'
+                    chain = True
+                lines.append(i)
+            assert newline_count + 1 == len(lines)
+            self.write(header)
+            self.write(delimiter * 3)
+            self.write('\n'.join(lines))
+            self.write(delimiter * 3)
+        else:
+            self.write(repr(node.s))
 
     def visit_Bytes(self, node):
-        self.maybe_break(node)
-        self.write(repr(node.s))
+        self.visit_Str(node, True)
 
     def visit_Num(self, node):
         self.maybe_break(node)
