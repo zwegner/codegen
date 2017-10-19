@@ -1,10 +1,11 @@
 language: python
 python:
   - "2.7"
+  - "3.5"
+  - "3.6"
+  - "3.7-dev"
+  - "nightly"
 branches:
   only:
     - master
-notifications:
-  email:
-    - andrew@andrewschaaf.com
 script: "python test.py"
