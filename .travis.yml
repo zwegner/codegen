@@ -8,4 +8,7 @@ python:
 branches:
   only:
     - master
+notifications:
+  email:
+    "cens.username@gmail.com"
 script: "python test.py"
