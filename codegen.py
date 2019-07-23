@@ -864,8 +864,11 @@ class SourceGenerator(NodeVisitor):
         sep = Sep(self.COMMA)
         for key, value in zip(node.keys, node.values):
             self.write(sep())
-            self.visit(key)
-            self.write(self.COLON)
+            if key is not None:
+                self.visit(key)
+                self.write(self.COLON)
+            else:
+                self.write('**')
             self.visit(value)
         self.paren_end('}')
 
